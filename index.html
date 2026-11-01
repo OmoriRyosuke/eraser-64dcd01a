@@ -55,6 +55,8 @@ button:focus-visible,.btn:focus-visible{outline:2px solid var(--accent);outline-
 }
 .status{padding:24px 12px;text-align:center;color:var(--ink);background:var(--card)}
 .note{padding:6px 12px;font-size:.85rem;color:var(--sub);border-bottom:1px solid var(--line)}
+.opt{display:flex;align-items:center;gap:8px;font-size:.95rem;cursor:pointer;width:fit-content}
+.opt input{width:20px;height:20px;margin:0;accent-color:var(--accent)}
 .tip{margin:0;padding-left:1.2em;color:var(--sub);font-size:.85rem;max-width:44em}
 @media (prefers-reduced-motion: reduce){*{transition:none!important}}
 </style>
@@ -71,6 +73,7 @@ button:focus-visible,.btn:focus-visible{outline:2px solid var(--accent);outline-
   </div>
   <div id="list"></div>
   <div id="print"></div>
+  <label class="opt"><input type="checkbox" id="withOrig">元の写真も保存する</label>
   <ul class="tip">
     <li>真上から、影が入らないように明るい場所で撮るときれいに消えます。</li>
     <li>書き込みが印刷の文字に重なっている所は、少し欠けたり残ったりします。</li>
@@ -475,6 +478,18 @@ async function saveBlob(blob, fname, btn){
   btn.textContent='保存しました';
 }
 
+// the original photo as a JPEG (iPhone photos may be HEIC, which cannot be saved here), made only when asked for
+const withOrig=document.getElementById('withOrig');
+async function origJpeg(d){
+  if (!d.origBlob){
+    const img=await loadImage(d.origUrl), c=document.createElement('canvas');
+    c.width=d.W; c.height=d.H; c.getContext('2d').drawImage(img,0,0,d.W,d.H);
+    d.origBlob=await new Promise(res=>c.toBlob(res,'image/jpeg',0.92));
+    c.width=0; c.height=0;
+  }
+  return d.origBlob;
+}
+
 // finished pages, in the order they were chosen
 const done=[];
 const actions=document.getElementById('actions'), saveAllBtn=document.getElementById('saveAll'), printBtn=document.getElementById('printAll'), printBox=document.getElementById('print');
@@ -495,9 +510,12 @@ saveAllBtn.addEventListener('click',async()=>{
     const JsPDF=await loadJsPDF();
     const pdf=new JsPDF({unit:'mm',format:'a4',orientation:'portrait'}), PW=210, PH=297, M=6;
     for (let k=0;k<done.length;k++){
-      const d=done[k]; if (k) pdf.addPage('a4','portrait');
-      const s=Math.min((PW-2*M)/d.W,(PH-2*M)/d.H), w=d.W*s, h=d.H*s;
-      pdf.addImage(new Uint8Array(await d.blob.arrayBuffer()),'JPEG',(PW-w)/2,(PH-h)/2,w,h);
+      const d=done[k], blobs=withOrig.checked?[d.blob,await origJpeg(d)]:[d.blob];
+      for (let j=0;j<blobs.length;j++){
+        if (k||j) pdf.addPage('a4','portrait');
+        const s=Math.min((PW-2*M)/d.W,(PH-2*M)/d.H), w=d.W*s, h=d.H*s;
+        pdf.addImage(new Uint8Array(await blobs[j].arrayBuffer()),'JPEG',(PW-w)/2,(PH-h)/2,w,h);
+      }
     }
     saveAllBtn.textContent=label; saveAllBtn.disabled=false;
     await saveBlob(pdf.output('blob'),'手書き消去済み_'+done.length+'ページ.pdf',saveAllBtn);
@@ -540,10 +558,14 @@ async function one(file){
       pic.src=b.dataset.v==='res'?url:origUrl;
     });
     const dl=document.createElement('button'); dl.className='btn primary'; dl.textContent='保存する';
-    dl.addEventListener('click',()=>saveBlob(blob,fname,dl));
+    const entry={blob,url,origUrl,W:r.W,H:r.H};
+    dl.addEventListener('click',async()=>{
+      await saveBlob(blob,fname,dl);
+      if (withOrig.checked) await saveBlob(await origJpeg(entry),fname.replace('_消去済み','_元'),dl);
+    });
     bar.append(seg,dl);
     const nt=document.createElement('div'); nt.className='note'; nt.textContent=r.note; bar.after(nt);
-    done.push({blob,url,W:r.W,H:r.H}); refreshActions();
+    done.push(entry); refreshActions();
   }catch(err){
     console.error(err);
     setStatus('うまく処理できませんでした：'+(err.message||err));
